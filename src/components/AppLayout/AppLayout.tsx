@@ -111,7 +111,8 @@ const useStyles = makeStyles(
         transform: "rotate(180deg)"
       },
       "&:hover": {
-        background: "#E6F3F3"
+        // background: "#E6F3F3"
+        background: "red"
       },
       background: theme.palette.background.paper,
       // background: "red",
@@ -183,8 +184,7 @@ const useStyles = makeStyles(
         "&:nth-child(4)": {
           top: 25
         },
-        // background: theme.palette.secondary.light,
-        background: "red",
+        background: theme.palette.secondary.light,
         display: "block",
         height: 1,
         left: "20%",
