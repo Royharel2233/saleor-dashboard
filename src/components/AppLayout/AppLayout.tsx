@@ -101,8 +101,7 @@ const useStyles = makeStyles(
     },
     isMenuSmall: {
       "& path": {
-        // fill: theme.palette.primary.main
-        fill: "red"
+        fill: theme.palette.primary.main
       },
       "& span": {
         margin: "0 8px"
@@ -156,8 +155,7 @@ const useStyles = makeStyles(
     },
     logoDark: {
       "& path": {
-        // fill: theme.palette.common.white
-        fill: "red"
+        fill: theme.palette.common.white
       },
       background: theme.palette.primary.main
       // background: "red"
