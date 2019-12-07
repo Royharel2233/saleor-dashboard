@@ -113,7 +113,8 @@ const useStyles = makeStyles(
       "&:hover": {
         background: "#E6F3F3"
       },
-      background: theme.palette.background.paper,
+      // background: theme.palette.background.paper,
+      background: "red",
       border: `solid 1px #EAEAEA`,
       borderRadius: "50%",
       cursor: "pointer",
@@ -145,7 +146,8 @@ const useStyles = makeStyles(
         top: "50%",
         transform: "translate(-50%,-50%)"
       },
-      background: theme.palette.secondary.main,
+      // background: theme.palette.secondary.main,
+      background: "red",
       display: "block",
       height: 80,
       position: "relative"
@@ -154,7 +156,8 @@ const useStyles = makeStyles(
       "& path": {
         fill: theme.palette.common.white
       },
-      background: theme.palette.primary.main
+      // background: theme.palette.primary.main
+      background: "red"
     },
     logoSmall: {
       "& svg": {
@@ -164,7 +167,8 @@ const useStyles = makeStyles(
       }
     },
     menu: {
-      background: theme.palette.background.paper,
+      // background: theme.palette.background.paper,
+      background: "red",
       height: "100vh",
       padding: "25px 20px"
     },
