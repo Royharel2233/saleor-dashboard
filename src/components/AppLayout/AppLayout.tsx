@@ -113,8 +113,8 @@ const useStyles = makeStyles(
       "&:hover": {
         background: "#E6F3F3"
       },
-      // background: theme.palette.background.paper,
-      background: "red",
+      background: theme.palette.background.paper,
+      // background: "red",
       border: `solid 1px #EAEAEA`,
       borderRadius: "50%",
       cursor: "pointer",
