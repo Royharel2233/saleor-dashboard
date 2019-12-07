@@ -183,7 +183,8 @@ const useStyles = makeStyles(
         "&:nth-child(4)": {
           top: 25
         },
-        background: theme.palette.secondary.light,
+        // background: theme.palette.secondary.light,
+        background: "red",
         display: "block",
         height: 1,
         left: "20%",
