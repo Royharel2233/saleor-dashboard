@@ -14,14 +14,12 @@ const useStyles = makeStyles(
     },
     primary: {
       "&$skeleton": {
-        // background: theme.palette.primary.main
-        background:'red'
+        background: theme.palette.primary.main
       }
     },
     skeleton: {
       animation: "skeleton-animation .75s linear infinite forwards alternate",
-      // background: theme.palette.background.default,
-      background: 'red',
+      background: theme.palette.background.default,
       borderRadius: 4,
       display: "block",
       height: "0.8em",
