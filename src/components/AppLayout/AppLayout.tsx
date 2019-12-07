@@ -148,7 +148,7 @@ const useStyles = makeStyles(
         transform: "translate(-50%,-50%)"
       },
       // background: theme.palette.secondary.main,
-      background: "red",
+      background: "#06847B",
       display: "block",
       height: 80,
       position: "relative"
@@ -201,7 +201,7 @@ const useStyles = makeStyles(
         left: 0
       },
       // background: theme.palette.background.paper,
-      background: "red",
+      background: "#06847B",
       borderRadius: "50%",
       cursor: "pointer",
       height: 42,
