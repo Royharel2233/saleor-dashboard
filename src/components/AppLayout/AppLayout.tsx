@@ -156,8 +156,8 @@ const useStyles = makeStyles(
       "& path": {
         fill: theme.palette.common.white
       },
-      // background: theme.palette.primary.main
-      background: "red"
+      background: theme.palette.primary.main
+      // background: "red"
     },
     logoSmall: {
       "& svg": {
@@ -167,8 +167,8 @@ const useStyles = makeStyles(
       }
     },
     menu: {
-      // background: theme.palette.background.paper,
-      background: "red",
+      background: theme.palette.background.paper,
+      // background: "red",
       height: "100vh",
       padding: "25px 20px"
     },
