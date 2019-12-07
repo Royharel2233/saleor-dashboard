@@ -101,7 +101,8 @@ const useStyles = makeStyles(
     },
     isMenuSmall: {
       "& path": {
-        fill: theme.palette.primary.main
+        // fill: theme.palette.primary.main
+        fill: "red"
       },
       "& span": {
         margin: "0 8px"
@@ -111,8 +112,8 @@ const useStyles = makeStyles(
         transform: "rotate(180deg)"
       },
       "&:hover": {
-        // background: "#E6F3F3"
-        background: "red"
+        background: "#E6F3F3"
+        // small point on the side menu
       },
       background: theme.palette.background.paper,
       // background: "red",
@@ -155,7 +156,8 @@ const useStyles = makeStyles(
     },
     logoDark: {
       "& path": {
-        fill: theme.palette.common.white
+        // fill: theme.palette.common.white
+        fill: "red"
       },
       background: theme.palette.primary.main
       // background: "red"
@@ -200,7 +202,8 @@ const useStyles = makeStyles(
       [theme.breakpoints.down("sm")]: {
         left: 0
       },
-      background: theme.palette.background.paper,
+      // background: theme.palette.background.paper,
+      background: "red",
       borderRadius: "50%",
       cursor: "pointer",
       height: 42,
