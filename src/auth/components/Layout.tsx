@@ -20,7 +20,7 @@ const useStyles = makeStyles(
       [theme.breakpoints.down("sm")]: {
         padding: theme.spacing(2)
       },
-      background: theme.palette.background.paper,
+      // background: theme.palette.background.paper,
       display: "flex",
       flexDirection: "column",
       height: "100vh",
