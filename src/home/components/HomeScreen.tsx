@@ -22,7 +22,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({ user }) => {
       <PageHeader
         title={intl.formatMessage(
           {
-            defaultMessage: "Hello there, {userName}",
+            defaultMessage: "Hello there, {userName}, Welcome to luxout Dashboard",
             description: "header",
             id: "homeScreenHeader"
           },

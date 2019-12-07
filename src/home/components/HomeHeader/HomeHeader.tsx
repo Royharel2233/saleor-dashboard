@@ -34,7 +34,7 @@ const HomeOrdersCard: React.FC<HomeOrdersCardProps> = props => {
       <Typography className={classes.pageHeader} variant="h4">
         {userName ? (
           <FormattedMessage
-            defaultMessage="Hello there, {userName}"
+            defaultMessage="Hello there, {userName}, Welcome to Genieously!"
             description="header"
             id="homeHeaderText"
             values={{
