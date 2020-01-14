@@ -13,8 +13,8 @@ const useStyles = makeStyles(
       "& svg": {
         display: "block",
         height: "40%",
-        width: "94%",
-        marginBottom: theme.spacing(4)
+        marginBottom: theme.spacing(4),
+        width: "94%"
       }
     },
     mainPanel: {
