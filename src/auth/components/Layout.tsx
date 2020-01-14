@@ -12,7 +12,8 @@ const useStyles = makeStyles(
     logo: {
       "& svg": {
         display: "block",
-        height: 40,
+        height: "40%",
+        width: "94%",
         marginBottom: theme.spacing(4)
       }
     },
@@ -62,7 +63,7 @@ const useStyles = makeStyles(
     },
     sidebarArt: {
       "& svg": {
-        width: "100%"
+        width: "90%"
       }
     }
   }),
