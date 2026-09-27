@@ -1,0 +1,4 @@
+.venv/
+*.log
+scan_out.json
+__pycache__/
