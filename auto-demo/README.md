@@ -43,3 +43,16 @@ alone cannot make that call, which is why the DIDs are in the scan.
 Stop the simulator and click scan: the app reports the connection failure.
 Edit `build_vehicle()` in `doip_simulator.py` to change the fault set: the
 verdict changes with it.
+
+## Source register
+
+`sources.yaml` holds the RAG source pack: 18 sources, each tagged with a tier
+(what it may be used *for*) and a verification status. Two entries were
+corrected against their source on 2026-09-27 — see `verified: corrected`.
+
+The governing rule: a dataset is not diagnostic ground truth merely because it
+contains automotive data. Tier A requires a verified repair outcome.
+
+Note for ingestion: `iso.org`, `nhtsa.gov` and `data.transportation.gov` are
+denied by this environment's egress policy, so those downloads must run
+elsewhere.

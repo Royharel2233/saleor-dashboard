@@ -1,0 +1,202 @@
+# RAG source register for the vehicle diagnostic agent.
+#
+# verified: checked from this container on 2026-09-27
+#   ok        - fetched and the claim about its contents holds
+#   corrected - reachable, but what it contains differs from the register entry
+#   unchecked - not fetched (egress-blocked, paywalled, or not yet inspected)
+#
+# tier: what the source may be used FOR. A source may never be cited as
+# diagnostic ground truth on a lower tier than A.
+#   A - diagnostic ground truth (symptom -> test -> measured fault -> verified repair)
+#   B - retrieval corpus (real but unverified outcome, or index-only)
+#   C - simulation fixtures (realistic inputs, no diagnostic claim)
+#   D - CAN/signal experimentation (not diagnosis at all)
+
+protocol_specs:
+  - id: iso-14229-1
+    name: ISO 14229-1:2026 Unified Diagnostic Services, Part 1 Application Layer
+    url: https://www.iso.org/standard/87962.html
+    tier: A
+    verified: ok
+    note: >
+      Edition 4, published June 2026; supersedes the withdrawn ISO 14229-1:2020.
+      Paywalled and iso.org is egress-blocked here, so it cannot be ingested.
+      Use it as the authority for service IDs and NRCs; udsoncan encodes the
+      same tables in readable form.
+    implements: scan.py, doip_simulator.py (services 0x10 0x14 0x19 0x22 0x31 0x3E)
+
+  - id: iso-13400
+    name: ISO 13400 Diagnostics over Internet Protocol (DoIP)
+    url: https://www.iso.org/search.html?q=ISO+13400
+    tier: A
+    verified: unchecked
+    note: Paywalled, egress-blocked. Payload types implemented per doipclient's
+      annotated message classes, which cite ISO-13400-2-2019(E) section tables.
+    implements: doip_simulator.py (0x0001 0x0004 0x0005 0x0006 0x0007 0x0008 0x8001 0x8002 0x8003)
+
+libraries:
+  - id: doipclient
+    name: python-doipclient
+    url: https://github.com/jacobschaer/python-doipclient
+    docs: https://python-doipclient.readthedocs.io/
+    tier: A
+    verified: ok
+    role: client-side DoIP transport
+    note: >
+      Client only. Ships DoIPClientUDSConnector for udsoncan, and message
+      classes with pack()/unpack() that we reuse server-side in the simulator.
+      Constraint found in use: a DoIPClient instance filters received
+      diagnostic messages by the single ECU logical address it was built with,
+      so multi-ECU scans need one activated socket per ECU.
+
+  - id: udsoncan
+    name: python-udsoncan
+    url: https://github.com/pylessard/python-udsoncan
+    docs: https://udsoncan.readthedocs.io/
+    tier: A
+    verified: ok
+    role: UDS application layer
+    note: Installed 1.26.1. Used for its connector contract and exception types.
+
+  - id: ediabaslib
+    name: EdiabasLib (open-source BMW/VAG EDIABAS interpreter)
+    url: https://github.com/uholeschak/ediabaslib
+    docs: https://uholeschak.github.io/ediabaslib/docs/Documentation.html
+    sim_format: https://github.com/uholeschak/ediabaslib/blob/master/docs/EdiabasLib.simulation_file.md
+    tier: C
+    verified: corrected
+    role: source of real BMW request/response telegram pairs
+    note: >
+      CORRECTION to the register's earlier claim that this can serve as the
+      vehicle-side fixture. The .sim format simulates telegrams at the EDIABAS
+      interpreter level: [REQUEST]/[RESPONSE]/[KEYBYTES] byte pairs for
+      BMW-FAST (OBD or ENET), DS2, ISO 9141, KWP 2000, TP2.0 and UDS. The
+      documentation describes no DoIP payload types and no TCP 13400 server.
+      It replaces the transport rather than speaking it, so it cannot answer
+      our socket. What it IS good for: harvesting recorded real-ECU byte pairs
+      to populate doip_simulator.py's ECU response tables, replacing the
+      hand-written DTC set with traced ones.
+
+diagnostic_ground_truth:
+  - id: pico-cases
+    name: Pico Automotive diagnostic case studies
+    url: https://www.picoauto.com/library/case-studies
+    tier: A
+    verified: unchecked
+    note: >
+      Real faults with documented diagnostic progression and verified repair.
+      The only tier-A case source in this register. Highest value per item and
+      the right basis for blind-case evaluation.
+    caution: Per-case licensing not reviewed. Check terms before bulk ingestion.
+
+  - id: bmw-st1102
+    name: BMW ST1102 Advanced Vehicle Diagnosis (training material)
+    url: null
+    tier: B
+    verified: unchecked
+    note: >
+      Kept for diagnostic METHODOLOGY (fault memory -> prioritisation -> test
+      plan -> measurement -> isolation), not for code. No official public
+      download URL confirmed; do not treat a third-party PDF mirror as
+      authoritative.
+
+retrieval:
+  - id: nhtsa-mfrcomms
+    name: NHTSA ODI Manufacturer Communications (TSB-type material)
+    url: https://www.nhtsa.gov/vehicle-manufacturers/manufacturer-communications
+    bulk_file: https://static.nhtsa.gov/nhtsa/downloads/Temp/MfrComms.txt
+    catalog: https://data.transportation.gov/Automobiles/NHTSA-s-Office-of-Defects-Investigation-ODI-Techni/hczg-qbhf
+    tier: B
+    verified: corrected
+    note: >
+      Better access than the register assumed: a TAB-delimited bulk flat file
+      covering communications since 1995-01-01, not only a per-vehicle web
+      form. Renamed from TSBS.txt to MfrComms.txt in May 2024; field lengths
+      changed again 2026-09-24.
+      But the limit matters more than the access: fields are NHTSA ID Number,
+      TSB/Document ID, Mfr Communication Date, NHTSA Components, Make, Model,
+      Model Year, Summary, Communication Type, Mfr Component System/Subsystem.
+      A short Summary, not the bulletin text. So this is an INDEX that tells
+      you a bulletin exists for a vehicle/component -- it is not a repair
+      procedure corpus, and cannot be cited as ground truth.
+    blocked_here: nhtsa.gov and data.transportation.gov are denied by this
+      environment's egress policy; the download must run elsewhere.
+
+  - id: nhtsa-complaints
+    name: NHTSA consumer complaints (CMPL flat file)
+    url: https://static.nhtsa.gov/odi/ffdd/cmpl/CMPL.txt
+    tier: B
+    verified: unchecked
+    note: Queryable by year/make/model. Owner-reported symptoms, no verified
+      cause. Useful for failure-pattern priors, never for a verdict.
+    blocked_here: true
+
+  - id: nhtsa-vpic
+    name: NHTSA vPIC Vehicle API (VIN decode)
+    url: https://vpic.nhtsa.dot.gov/api/
+    tier: B
+    verified: unchecked
+    role: VIN -> make/model/year/engine, to set diagnostic context
+    note: Cheapest useful capability to add. Feed it the VIN that UDS 0x22
+      0xF190 already returns.
+    blocked_here: likely (nhtsa.dot.gov)
+
+simulation_fixtures:
+  - id: dieselobd
+    name: OBD-Dataset (real OBD-II PID measurements, ANCEL scanner)
+    url: https://github.com/AbouAbdallah-Lounis/OBD-Dataset
+    tier: C
+    verified: unchecked
+    note: >
+      Real engine load, coolant temp, MAP, RPM, speed, IAT, MAF, fuel rail
+      pressure, barometric pressure, module voltage, ambient temp, plus DTCs.
+      Directly replaces the invented live values in doip_simulator.py's DID
+      table -- the single highest-value swap available to the demo.
+
+  - id: vcds-autoscan
+    name: Public VCDS AutoScan example
+    url: https://gist.github.com/twitnic/ea76f3099d8a45164a092b235b28d39f
+    tier: C
+    verified: unchecked
+    note: Scan interpretation, fault clustering, ECU topology, DTC
+      prioritisation. No verified repair outcome, so not ground truth.
+
+can_experimentation:
+  - id: road
+    name: ROAD CAN dataset (Oak Ridge National Laboratory)
+    url: https://zenodo.org/records/10462796
+    tier: D
+    verified: unchecked
+    note: ~3.5h real CAN traffic, normal plus injected conditions. Bus-level
+      reasoning and anomaly detection, not repair.
+  - id: openpilot-logs
+    name: comma.ai openpilot logs
+    url: https://github.com/commaai/openpilot/blob/master/docs/concepts/logs.md
+    tier: D
+    verified: unchecked
+    note: Normal-behaviour baselines, time-series and signal correlation.
+  - id: hcrl
+    name: HCRL automotive CAN / security datasets
+    url: https://ocslab.hksecurity.net/Datasets
+    tier: D
+    verified: unchecked
+  - id: autohack
+    name: AutoHack Hyundai CAN dataset
+    url: https://zenodo.org/records/20321379
+    tier: D
+    verified: unchecked
+    note: Zenodo record ID not confirmed from this container.
+  - id: syncan
+    name: ETAS SynCAN (synthetic CAN)
+    url: https://github.com/etas
+    tier: D
+    verified: unchecked
+  - id: openxc
+    name: OpenXC (Ford-originated vehicle data tooling and traces)
+    url: https://github.com/openxc
+    tier: D
+    verified: unchecked
+
+# Governing rule, carried over from the register and worth restating:
+# a dataset is not diagnostic ground truth merely because it contains
+# automotive data. Tier A requires a verified repair outcome.
