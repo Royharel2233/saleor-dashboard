@@ -28,6 +28,7 @@ ECU_MAP = [
 DTC_TEXT = {
     0x101E01: "Air mass sensor, plausibility: signal too low",
     0x10A204: "Mixture adaptation bank 1, additive: limit exceeded",
+    0x10A205: "Mixture adaptation bank 1, additive: limit exceeded (rich)",
     0x480AB2: "Interface to DME: implausible torque signal",
     0xD35A11: "Signal invalid: engine data message missing",
 }

@@ -108,3 +108,39 @@ agent clear fault memory and actuate hardware.
 Built against `mcp` 2.2.0, where `FastMCP` was renamed to `MCPServer` and the
 annotation fields are snake_case (`read_only_hint`). Guides written for the 1.x
 API do not apply.
+
+## Does it actually read the signals?
+
+`python discriminate.py` starts the simulator once per fault scenario, scans it,
+triages it, and prints whether the verdicts differ:
+
+```
+healthy            -> no faults
+intake_leak        -> unmetered air between the MAF and the throttle plate
+manifold_leak      -> unmetered air downstream of the throttle plate
+maf_signal_fault   -> signal implausible with no mixture error: sensor, not a leak
+over_fuelling      -> rich mixture: fuel pressure / injectors
+5 distinct verdicts across 5 scenarios. No collisions.
+```
+
+The result that matters: **`intake_leak` and `manifold_leak` store an identical
+DTC set** — `101E01, 10A204, 480AB2, D35A11` — and still produce different
+verdicts and different first inspection steps. The fault codes cannot separate
+them. Fuel trim, manifold pressure and idle speed can:
+
+| Signal | What it decides |
+| --- | --- |
+| Fuel trim near zero | The mixture is correct, so nothing unmetered is entering — the *reading* is wrong, not the air |
+| Trim positive, manifold holds vacuum, idle normal | Air enters between sensor and throttle plate |
+| Trim positive, manifold pressure raised or idle elevated | Throttle has lost control of the manifold: the leak is downstream of it |
+| Trim negative | Rich, not lean. An air leak cannot cause it |
+
+### What this does not prove
+
+The scenario values and the thresholds were written by the same author, so the
+test shows the engine reads the signals it is given and that those signals carry
+enough information in principle. It does **not** validate the thresholds
+(`IDLE_MAF_EXPECTED`, `IDLE_MAP_SEALED_MAX`, `IDLE_RPM_NORMAL_MAX`) against real
+vehicles. They are estimates, which is why no verdict is reported above
+`medium` confidence. Replacing them, and the scenario values, with DieselOBD
+measurements is what would turn this from a demonstration into evidence.

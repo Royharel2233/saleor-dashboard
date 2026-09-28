@@ -128,43 +128,171 @@ def _triage_rules(scan: dict) -> dict:
                 {"ecu": fault["ecu"], "code": fault["code"], "note": "No link to the primary cause; inspect separately."}
             )
 
-    evidence, confidence = [], "low"
-    maf = live.get("0x0012:maf_g_per_s")
-    trim = live.get("0x0012:long_term_fuel_trim_pct")
-    rpm = live.get("0x0012:engine_speed_rpm")
-    if maf is not None and rpm:
-        evidence.append(f"MAF reads {maf} g/s at {rpm} rpm idle (B48 expects roughly 3.5-4.5 g/s).")
-    if trim is not None:
-        evidence.append(f"Long-term fuel trim {trim:+.1f}% -- the ECU is adding fuel to correct a lean mixture.")
-    if maf is not None and trim is not None and trim > 10 and maf < 3.0:
-        evidence.append(
-            "Low measured air mass with a positive (lean) trim correction means air is "
-            "entering downstream of the sensor -- unmetered. A failed sensor element alone "
-            "would not drive trim in this direction."
-        )
-        confidence = "high"
-    elif evidence:
-        confidence = "medium"
-    else:
-        evidence.append("DTC-pattern only: no live data returned to corroborate the verdict.")
+    hypothesis = _mixture_hypothesis(live)
 
     return {
         "primary": {
             "ecu": primary["ecu"],
             "code": primary["code"],
-            "cause": primary["description"],
-            "confidence": confidence,
+            "cause": hypothesis["cause"] or primary["description"],
+            "confidence": hypothesis["confidence"],
         },
         "consequential": consequential,
         "independent": independent,
+        "evidence": hypothesis["evidence"],
+        "plan": hypothesis["plan"],
+    }
+
+
+# Idle thresholds. These are estimates, not values read from a specification,
+# which is why no verdict built on them is reported above medium confidence.
+IDLE_MAF_EXPECTED = (3.5, 4.5)   # g/s, B48 at warm idle
+IDLE_MAP_SEALED_MAX = 450        # hPa; above this at idle, manifold vacuum is being lost
+IDLE_RPM_NORMAL_MAX = 900        # rpm; above this at idle, something is admitting extra air
+TRIM_LEAN_MIN = 10.0             # % additive correction that counts as a real lean error
+TRIM_NEUTRAL_MAX = 5.0           # % below which the mixture is effectively correct
+
+
+def _mixture_hypothesis(live: dict) -> dict:
+    """Decide what the live values actually support, and how confidently.
+
+    The three cases below share DTCs, so the codes alone cannot separate them.
+    What separates them is fuel trim (is the mixture wrong at all?) and then
+    manifold pressure with idle speed (is air entering before or after the
+    throttle plate?).
+    """
+    maf = live.get("0x0012:maf_g_per_s")
+    trim = live.get("0x0012:long_term_fuel_trim_pct")
+    rpm = live.get("0x0012:engine_speed_rpm")
+    map_hpa = live.get("0x0012:intake_manifold_pressure_hpa")
+
+    evidence = []
+    if maf is not None and rpm:
+        evidence.append(
+            f"MAF {maf} g/s at {rpm} rpm (idle expectation roughly "
+            f"{IDLE_MAF_EXPECTED[0]}-{IDLE_MAF_EXPECTED[1]} g/s; estimate, not a specification)."
+        )
+    if trim is not None:
+        evidence.append(f"Long-term fuel trim {trim:+.1f}%.")
+    if map_hpa is not None:
+        evidence.append(f"Intake manifold pressure {map_hpa} hPa.")
+
+    if maf is None or trim is None:
+        evidence.append("No live data returned: verdict rests on the DTC pattern alone.")
+        return {
+            "cause": None,
+            "confidence": "low",
+            "evidence": evidence,
+            "plan": [
+                "Re-read live data with the engine running; without it these codes "
+                "cannot be separated from each other.",
+                "Compare MAF against calculated load at 2000 rpm.",
+                "Re-read 0x19 to confirm which codes are current rather than historic.",
+            ],
+        }
+
+    maf_low = maf < IDLE_MAF_EXPECTED[0]
+    manifold_sealed = map_hpa is not None and map_hpa <= IDLE_MAP_SEALED_MAX
+    idle_normal = rpm is not None and rpm <= IDLE_RPM_NORMAL_MAX
+
+    # Case 1: the mixture is correct, so no unmetered air is entering. A low
+    # air mass reading with no lean correction means the READING is wrong.
+    if abs(trim) <= TRIM_NEUTRAL_MAX:
+        evidence.append(
+            "Trim is near zero, so the mixture is correct and no unmetered air is "
+            "entering. A leak would force a positive correction. The air mass "
+            "signal itself is implausible."
+        )
+        return {
+            "cause": "Air mass sensor signal implausible with no mixture error: sensor or its wiring, not a leak",
+            "confidence": "medium",
+            "evidence": evidence,
+            "plan": [
+                "Back-probe the MAF connector for supply, ground and signal; check for "
+                "chafing and water ingress before condemning the sensor.",
+                "Compare MAF against calculated load at 2000 rpm: a proportional offset "
+                "across the range indicates the sensor, not the intake tract.",
+                "Do not smoke-test first -- the trim value already argues against a leak.",
+            ],
+        }
+
+    # Case 2: lean correction with lost manifold vacuum or raised idle. Air is
+    # entering AFTER the throttle plate, which is why the throttle has lost
+    # control of manifold pressure.
+    if trim >= TRIM_LEAN_MIN and (not manifold_sealed or not idle_normal):
+        reasons = []
+        if not manifold_sealed:
+            reasons.append(
+                f"manifold pressure {map_hpa} hPa is above the {IDLE_MAP_SEALED_MAX} hPa "
+                f"a sealed manifold holds at idle"
+            )
+        if not idle_normal:
+            reasons.append(f"idle is elevated at {rpm} rpm")
+        evidence.append(
+            "Lean correction with " + " and ".join(reasons) + ": the throttle plate has "
+            "lost control of manifold pressure, so air is entering downstream of it."
+        )
+        return {
+            "cause": "Unmetered air entering downstream of the throttle plate (manifold gasket, PCV or a vacuum line)",
+            "confidence": "medium",
+            "evidence": evidence,
+            "plan": [
+                "Smoke-test the intake manifold, its gasket, the PCV diaphragm and every "
+                "vacuum line and brake-booster connection.",
+                "Watch whether idle falls back to normal when the leak is sealed.",
+                "Clear adaptations and re-read 0x19 to confirm the codes do not return.",
+            ],
+        }
+
+    # Case 3: lean correction while the manifold still holds vacuum and idle is
+    # normal. The leak is between the sensor and the throttle plate.
+    if trim >= TRIM_LEAN_MIN and maf_low:
+        evidence.append(
+            f"Lean correction while manifold pressure stays at {map_hpa} hPa and idle "
+            f"at {rpm} rpm: the throttle still controls the manifold, so the leak is "
+            f"upstream of it and downstream of the sensor. This excludes the manifold "
+            f"gasket and PCV."
+        )
+        return {
+            "cause": "Unmetered air entering between the air mass sensor and the throttle plate",
+            "confidence": "medium",
+            "evidence": evidence,
+            "plan": [
+                "Smoke-test from the MAF outlet to the throttle plate: turbo inlet duct, "
+                "charge pipe and its boot, and the intercooler connections.",
+                "Compare MAF against calculated load at 2000 rpm; a load-dependent error "
+                "indicates a leak, a proportional one the sensor.",
+                "Clear adaptations and re-read 0x19 to confirm the codes do not return.",
+            ],
+        }
+
+    # Case 4: negative trim. The engine is being over-fuelled; a lean-air
+    # hypothesis does not fit and must not be reported.
+    if trim <= -TRIM_LEAN_MIN:
+        evidence.append(
+            "Trim is negative, so the ECU is removing fuel: the mixture is rich. "
+            "An air leak cannot cause this."
+        )
+        return {
+            "cause": "Over-fuelling: injector leak, fuel pressure regulation or a contaminated air mass sensor reading high",
+            "confidence": "medium",
+            "evidence": evidence,
+            "plan": [
+                "Check fuel pressure against specification, hot and cold.",
+                "Inspect injectors for leak-down; compare cylinder contributions.",
+                "Check for oil contamination on the MAF element causing a high reading.",
+            ],
+        }
+
+    evidence.append("Live values do not fit a single mixture hypothesis.")
+    return {
+        "cause": None,
+        "confidence": "low",
         "evidence": evidence,
         "plan": [
-            "Smoke-test the intake tract from the MAF sensor to the throttle body; "
-            "check the charge-pipe boot and PCV diaphragm for splits.",
-            "Compare MAF reading against calculated load at 2000 rpm; a proportional "
-            "offset points at the sensor, a load-dependent one at a leak.",
-            "Clear adaptations, run UDS RoutineControl 0x31 on the tank ventilation "
-            "valve, then re-read 0x19 to confirm which codes return.",
+            "Record MAF, trim, manifold pressure and idle speed across the load range.",
+            "Compare against a known-good vehicle of the same model.",
+            "Re-read 0x19 after a drive cycle to see which codes are current.",
         ],
     }
 

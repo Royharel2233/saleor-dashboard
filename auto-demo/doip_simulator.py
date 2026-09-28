@@ -141,54 +141,92 @@ class Ecu:
         return bytes([0x71, sub]) + struct.pack(">H", routine) + bytes([0x00])
 
 
-def build_vehicle():
-    """The fault picture: one real cause in the DME, two downstream consequences.
-
-    Live values are what make the triage defensible rather than a guess:
-    the MAF reads far below the modelled load while long-term fuel trim is
-    pegged lean -- the signature of unmetered air entering after the sensor.
-    """
-    dme = Ecu(
-        0x0012,
-        "DME (Engine Management)",
-        dtcs=[
+# Fault scenarios. Each one is a whole vehicle state: which codes are stored
+# and what the live values read. They exist so the diagnostic engine can be
+# tested for DISCRIMINATION -- an engine that returns the same verdict for an
+# intake leak, a manifold leak and a dead sensor is not reading the signals.
+#
+# Live values are encoded as the ECU serves them: MAF and fuel trim x0.01.
+SCENARIOS = {
+    "intake_leak": {
+        "description": "Unmetered air between the MAF and the throttle plate",
+        "dme_dtcs": [
             (0x101E01, 0x2F, "Air mass sensor, plausibility: signal too low"),
             (0x10A204, 0x2F, "Mixture adaptation bank 1, additive: limit exceeded"),
         ],
-        dids={
-            0xF190: VEHICLE["vin"].encode("ascii"),
-            0xF186: bytes([0x01]),
-            0x4001: struct.pack(">H", 210),   # MAF x0.01 g/s -> 2.10
-            0x4002: struct.pack(">h", 2380),  # LTFT x0.01 %  -> +23.80
-            0x4003: struct.pack(">H", 762),   # engine speed rpm
-            0x4004: struct.pack(">H", 344),   # intake manifold pressure hPa
-        },
-    )
-    dsc = Ecu(
-        0x0029,
-        "DSC (Dynamic Stability Control)",
-        dtcs=[(0x480AB2, 0x2F, "Interface to DME: implausible torque signal")],
-        dids={0xF190: VEHICLE["vin"].encode("ascii")},
-    )
-    bdc = Ecu(
-        0x0040,
-        "BDC (Body Domain Controller)",
-        dtcs=[(0xD35A11, 0x2F, "Signal invalid: engine data message missing")],
-        dids={0xF190: VEHICLE["vin"].encode("ascii")},
-    )
-    ecus = {e.address: e for e in (dme, dsc, bdc)}
-    # The gateway answers for itself and routes for everyone else.
-    gateway = Ecu(
-        GATEWAY_ADDRESS,
-        "Gateway",
-        dtcs=[],
-        dids={0xF190: VEHICLE["vin"].encode("ascii")},
-    )
-    ecus[GATEWAY_ADDRESS] = gateway
-    return ecus
+        "dme_live": {0x4001: 210, 0x4002: 2380, 0x4003: 762, 0x4004: 344},
+        "downstream": True,
+    },
+    "manifold_leak": {
+        "description": "Vacuum leak downstream of the throttle plate (manifold gasket / PCV)",
+        "dme_dtcs": [
+            (0x101E01, 0x2F, "Air mass sensor, plausibility: signal too low"),
+            (0x10A204, 0x2F, "Mixture adaptation bank 1, additive: limit exceeded"),
+        ],
+        # Same two codes as intake_leak. The DTCs alone cannot tell these apart;
+        # only MAP and idle speed can. Manifold vacuum is lost and idle is high.
+        "dme_live": {0x4001: 265, 0x4002: 2010, 0x4003: 1140, 0x4004: 641},
+        "downstream": True,
+    },
+    "maf_signal_fault": {
+        "description": "MAF signal implausible with no mixture error: sensor or wiring, not a leak",
+        "dme_dtcs": [
+            (0x101E01, 0x2F, "Air mass sensor, plausibility: signal too low"),
+        ],
+        # Low measured air mass, but trim is near zero: the mixture is correct,
+        # so no unmetered air is entering. The reading itself is wrong.
+        "dme_live": {0x4001: 195, 0x4002: 90, 0x4003: 758, 0x4004: 338},
+        "downstream": True,
+    },
+    "over_fuelling": {
+        "description": "Rich mixture: negative trim with normal air mass",
+        "dme_dtcs": [
+            (0x10A205, 0x2F, "Mixture adaptation bank 1, additive: limit exceeded (rich)"),
+        ],
+        "dme_live": {0x4001: 402, 0x4002: -1880, 0x4003: 771, 0x4004: 349},
+        "downstream": False,
+    },
+    "healthy": {
+        "description": "No stored faults",
+        "dme_dtcs": [],
+        "dme_live": {0x4001: 398, 0x4002: 120, 0x4003: 768, 0x4004: 347},
+        "downstream": False,
+    },
+}
+
+DOWNSTREAM_DTCS = {
+    0x0029: (0x480AB2, 0x2F, "Interface to DME: implausible torque signal"),
+    0x0040: (0xD35A11, 0x2F, "Signal invalid: engine data message missing"),
+}
 
 
-ECUS = build_vehicle()
+def build_vehicle(scenario_name="intake_leak"):
+    """Assemble the ECU set for one scenario.
+
+    The DME is the upstream node. When its state is unhealthy the dependent
+    ECUs also store a code, which is what the triage engine has to recognise
+    as consequential rather than as three separate problems.
+    """
+    scenario = SCENARIOS[scenario_name]
+    vin_bytes = VEHICLE["vin"].encode("ascii")
+
+    dme_dids = {0xF190: vin_bytes, 0xF186: bytes([0x01])}
+    for did, value in scenario["dme_live"].items():
+        # Fuel trim is signed; the others are not.
+        dme_dids[did] = struct.pack(">h" if did == 0x4002 else ">H", value)
+
+    dme = Ecu(0x0012, "DME (Engine Management)", scenario["dme_dtcs"], dme_dids)
+    dsc = Ecu(0x0029, "DSC (Dynamic Stability Control)", [], {0xF190: vin_bytes})
+    bdc = Ecu(0x0040, "BDC (Body Domain Controller)", [], {0xF190: vin_bytes})
+    if scenario["downstream"]:
+        dsc.dtcs.append(DOWNSTREAM_DTCS[0x0029])
+        bdc.dtcs.append(DOWNSTREAM_DTCS[0x0040])
+
+    gateway = Ecu(GATEWAY_ADDRESS, "Gateway", [], {0xF190: vin_bytes})
+    return {e.address: e for e in (gateway, dme, dsc, bdc)}
+
+
+ECUS = build_vehicle()  # replaced at startup by --scenario
 
 
 def pack_doip(payload_type, payload, protocol_version=0x02):
@@ -351,7 +389,16 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="interface to bind (default 127.0.0.1)")
     parser.add_argument("--tcp-port", type=int, default=TCP_PORT)
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument(
+        "--scenario",
+        default="intake_leak",
+        choices=sorted(SCENARIOS),
+        help="which vehicle fault state to serve",
+    )
     args = parser.parse_args()
+
+    global ECUS
+    ECUS = build_vehicle(args.scenario)
 
     logging.basicConfig(
         level=logging.WARNING if args.quiet else logging.INFO,
@@ -367,6 +414,7 @@ def main():
     server = ThreadedDoIPServer((args.host, args.tcp_port), DoIPTCPHandler)
     logger.info("DoIP simulator listening on %s:%d (TCP) and :%d (UDP)", args.host, args.tcp_port, UDP_PORT)
     logger.info("VIN %s  %s", VEHICLE["vin"], VEHICLE["model"])
+    logger.info("scenario '%s': %s", args.scenario, SCENARIOS[args.scenario]["description"])
     for address, ecu in sorted(ECUS.items()):
         logger.info("  ECU 0x%04X  %-32s %d stored DTC(s)", address, ecu.name, len(ecu.dtcs))
     try:
