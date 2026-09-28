@@ -146,12 +146,17 @@ simulation_fixtures:
     name: OBD-Dataset (real OBD-II PID measurements, ANCEL scanner)
     url: https://github.com/AbouAbdallah-Lounis/OBD-Dataset
     tier: C
-    verified: unchecked
+    verified: corrected
     note: >
-      Real engine load, coolant temp, MAP, RPM, speed, IAT, MAF, fuel rail
-      pressure, barometric pressure, module voltage, ambient temp, plus DTCs.
-      Directly replaces the invented live values in doip_simulator.py's DID
-      table -- the single highest-value swap available to the demo.
+      CORRECTION. Real data (118,477 rows, 9 vehicles, ANCEL ELITE 610) but it
+      cannot calibrate this engine's thresholds, for three independent reasons:
+      it has NO fuel trim channel, which is the engine's primary discriminator;
+      all nine vehicles are unthrottled diesels while the target is a petrol
+      B48, so manifold-vacuum reasoning has no diesel equivalent; and its units
+      are imperial (BARO in psi, ECT in Fahrenheit, MAF in lb/s) while its
+      README claims kPa, Celsius and g/s, so any figure taken at face value is
+      wrong by a factor. What it IS: a real multi-label DTC classification
+      corpus, 14 labels including P0102 and P0107. See CALIBRATION.md.
 
   - id: vcds-autoscan
     name: Public VCDS AutoScan example

@@ -151,6 +151,18 @@ IDLE_MAP_SEALED_MAX = 450        # hPa; above this at idle, manifold vacuum is b
 IDLE_RPM_NORMAL_MAX = 900        # rpm; above this at idle, something is admitting extra air
 TRIM_LEAN_MIN = 10.0             # % additive correction that counts as a real lean error
 TRIM_NEUTRAL_MAX = 5.0           # % below which the mixture is effectively correct
+BOUNDARY_MARGIN = 0.05           # a reading within 5% of a threshold decides nothing
+
+
+def _borderline(value, threshold, label, margin=BOUNDARY_MARGIN):
+    """True when a reading sits close enough to a threshold that either side is
+    within measurement noise. Treating such a reading as decisive produces a
+    verdict that flips on a rounding error."""
+    if value is None or threshold == 0:
+        return None
+    if abs(value - threshold) <= abs(threshold) * margin:
+        return f"{label} {value} is within {int(margin * 100)}% of the {threshold} decision threshold"
+    return None
 
 
 def _mixture_hypothesis(live: dict) -> dict:
@@ -192,8 +204,36 @@ def _mixture_hypothesis(live: dict) -> dict:
         }
 
     maf_low = maf < IDLE_MAF_EXPECTED[0]
-    manifold_sealed = map_hpa is not None and map_hpa <= IDLE_MAP_SEALED_MAX
-    idle_normal = rpm is not None and rpm <= IDLE_RPM_NORMAL_MAX
+    # Absence of a reading is not evidence. A missing MAP value leaves the
+    # question of where the air enters open; it does not answer it.
+    manifold_sealed = None if map_hpa is None else map_hpa <= IDLE_MAP_SEALED_MAX
+    idle_normal = None if rpm is None else rpm <= IDLE_RPM_NORMAL_MAX
+
+    # Fix 2: refuse to pick a side when a decisive reading sits on a threshold.
+    proximity = [
+        _borderline(trim, TRIM_LEAN_MIN, "fuel trim"),
+        _borderline(trim, TRIM_NEUTRAL_MAX, "fuel trim"),
+        _borderline(map_hpa, IDLE_MAP_SEALED_MAX, "manifold pressure"),
+        _borderline(rpm, IDLE_RPM_NORMAL_MAX, "idle speed"),
+        _borderline(maf, IDLE_MAF_EXPECTED[0], "MAF"),
+    ]
+    borderline = [note for note in proximity if note]
+    if borderline:
+        evidence.extend(borderline)
+        evidence.append(
+            "A reading this close to a decision threshold does not separate the "
+            "candidate faults; repeat the measurement before acting on it."
+        )
+        return {
+            "cause": None,
+            "confidence": "low",
+            "evidence": evidence,
+            "plan": [
+                "Repeat the measurement at operating temperature and confirm the reading is stable.",
+                "Record the same signals at 2000 rpm, where the candidates separate more widely.",
+                "Do not replace parts on this data alone.",
+            ],
+        }
 
     # Case 1: the mixture is correct, so no unmetered air is entering. A low
     # air mass reading with no lean correction means the READING is wrong.
@@ -219,14 +259,14 @@ def _mixture_hypothesis(live: dict) -> dict:
     # Case 2: lean correction with lost manifold vacuum or raised idle. Air is
     # entering AFTER the throttle plate, which is why the throttle has lost
     # control of manifold pressure.
-    if trim >= TRIM_LEAN_MIN and (not manifold_sealed or not idle_normal):
+    if trim >= TRIM_LEAN_MIN and (manifold_sealed is False or idle_normal is False):
         reasons = []
-        if not manifold_sealed:
+        if manifold_sealed is False:
             reasons.append(
                 f"manifold pressure {map_hpa} hPa is above the {IDLE_MAP_SEALED_MAX} hPa "
                 f"a sealed manifold holds at idle"
             )
-        if not idle_normal:
+        if idle_normal is False:
             reasons.append(f"idle is elevated at {rpm} rpm")
         evidence.append(
             "Lean correction with " + " and ".join(reasons) + ": the throttle plate has "
@@ -246,7 +286,24 @@ def _mixture_hypothesis(live: dict) -> dict:
 
     # Case 3: lean correction while the manifold still holds vacuum and idle is
     # normal. The leak is between the sensor and the throttle plate.
-    if trim >= TRIM_LEAN_MIN and maf_low:
+    if trim >= TRIM_LEAN_MIN and maf_low and manifold_sealed is None:
+        evidence.append(
+            "No manifold pressure reading, so whether the air enters before or after "
+            "the throttle plate is undetermined."
+        )
+        return {
+            "cause": "Unmetered air entering, position relative to the throttle plate undetermined",
+            "confidence": "low",
+            "evidence": evidence,
+            "plan": [
+                "Read intake manifold pressure and idle speed: they decide whether the leak "
+                "is upstream or downstream of the throttle plate.",
+                "Smoke-test only after that reading narrows the search.",
+                "Compare MAF against calculated load at 2000 rpm.",
+            ],
+        }
+
+    if trim >= TRIM_LEAN_MIN and maf_low and manifold_sealed:
         evidence.append(
             f"Lean correction while manifold pressure stays at {map_hpa} hPa and idle "
             f"at {rpm} rpm: the throttle still controls the manifold, so the leak is "

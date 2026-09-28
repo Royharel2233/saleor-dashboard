@@ -144,3 +144,42 @@ enough information in principle. It does **not** validate the thresholds
 vehicles. They are estimates, which is why no verdict is reported above
 `medium` confidence. Replacing them, and the scenario values, with DieselOBD
 measurements is what would turn this from a demonstration into evidence.
+
+## Robustness harness
+
+`python robustness.py` asks four questions that have nothing to do with whether
+a verdict is right:
+
+1. **Boundary sweep** — walk each signal across its range and report where the
+   verdict changes, flagging any substantive verdict entered from two
+   disconnected bands.
+2. **Sensitivity** — move each signal 1% either side of its value and of each
+   threshold. A verdict that flips on 1% is a coin toss, not a diagnosis.
+3. **Degradation** — drop live data, drop MAP, drop trim, drop the DTCs, break a
+   DTC text lookup. Does confidence fall, and does the engine say why?
+4. **Wasted inspection steps** — does plan step 1 name a component the data
+   already excludes? This is the metric with commercial meaning.
+
+### It found two real bugs on its first run
+
+**Missing data read as evidence.** With no MAP reading, `manifold_sealed`
+evaluated false rather than unknown, so the engine confidently placed a leak
+downstream of the throttle plate using a measurement it never took. Absence of a
+reading is not evidence; fixed by making the flag tri-state and requiring
+positive evidence for that branch.
+
+**Verdicts flipping on 1% moves.** Every threshold was a hard edge, so a reading
+at MAF 3.465 vs 3.535 g/s produced two different faults and two different
+repairs. Fixed with a 5% band around each threshold in which the engine returns
+no verdict, says which reading is borderline, and asks for the measurement to be
+repeated at 2000 rpm where the candidates separate.
+
+After both fixes: no findings, wasted-step rate 0/4, and `discriminate.py` still
+returns five distinct verdicts across five scenarios.
+
+## Calibration status
+
+See `CALIBRATION.md`. The DieselOBD dataset cannot calibrate these thresholds —
+it has no fuel trim channel, every vehicle is an unthrottled diesel, and its
+units are imperial while its README claims metric. The thresholds remain
+estimates, which is why nothing reports above medium confidence.
