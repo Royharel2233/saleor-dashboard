@@ -56,3 +56,55 @@ contains automotive data. Tier A requires a verified repair outcome.
 Note for ingestion: `iso.org`, `nhtsa.gov` and `data.transportation.gov` are
 denied by this environment's egress policy, so those downloads must run
 elsewhere.
+
+## MCP server
+
+`mcp_server.py` exposes the scan layer as MCP tools over stdio. Eight tools,
+split by what they do to the vehicle:
+
+| Tool | Annotations | Notes |
+| --- | --- | --- |
+| `vehicle_list_ecus` | readOnly | No connection opened; call first |
+| `vehicle_identify` | readOnly | VIN via 0x22 F190 |
+| `vehicle_scan_all` | readOnly | Every ECU: DTCs, status bits, live data |
+| `vehicle_read_dtcs` | readOnly | One ECU, 0x19 02 |
+| `vehicle_read_data_identifier` | readOnly | Arbitrary DID, raw hex, no guessed scaling |
+| `vehicle_triage_scan` | readOnly | Scan + root cause, reports which engine ran |
+| `vehicle_clear_dtcs` | **destructive** | 0x14, gated |
+| `vehicle_run_routine` | **destructive** | 0x31, gated, actuates hardware |
+
+### The write gate
+
+The two destructive tools refuse unless the operator sets, out of band:
+
+```powershell
+$env:VEHICLE_MCP_ALLOW_WRITES = "1"
+```
+
+*and* the call passes `confirm: true` with a `reason`. Without the environment
+variable no prompt, tool argument or agent loop can reach them — the refusal
+happens before any socket opens. Verified both ways: `refused` by default,
+`cleared` only with the variable set, and `confirm: false` refused in both
+configurations.
+
+### Client configuration
+
+```json
+{
+  "mcpServers": {
+    "vehicle-diagnostics": {
+      "command": "C:\\path\\to\\auto-demo\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\path\\to\\auto-demo\\mcp_server.py"]
+    }
+  }
+}
+```
+
+Add `"env": {"VEHICLE_MCP_ALLOW_WRITES": "1"}` only when you intend to let an
+agent clear fault memory and actuate hardware.
+
+### SDK note
+
+Built against `mcp` 2.2.0, where `FastMCP` was renamed to `MCPServer` and the
+annotation fields are snake_case (`read_only_hint`). Guides written for the 1.x
+API do not apply.
