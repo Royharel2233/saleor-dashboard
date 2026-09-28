@@ -68,3 +68,83 @@ Until such a log exists, `IDLE_MAF_EXPECTED`, `IDLE_MAP_SEALED_MAX` and
 reported above medium confidence. The cheapest honest source is a baseline log
 from one real petrol vehicle, which is the same hardware purchase already on the
 list.
+
+---
+
+# A usable source, and what it says about the thresholds
+
+`raleighlittles/bluedriver-visualization` — 211 BlueDriver dongle logs from one
+petrol vehicle, recorded 2018 by a stranger for unrelated reasons. That last part
+is the point: nobody chose this data to make this engine look right.
+
+Found by GitHub code search on the column header a logging tool emits
+(`"Long Term Fuel Trim Bank 1" extension:csv`) rather than by searching for
+datasets. Searching for the artefact beats searching for the category.
+
+**Coverage: 112 of 211 logs carry MAF, long-term fuel trim and RPM. Zero carry
+manifold absolute pressure.** So three of five thresholds can be checked against
+reality and `IDLE_MAP_SEALED_MAX` still cannot.
+
+## The real idle distributions (1,542 idle samples)
+
+| Signal | min | p5 | median | p95 | max |
+| --- | --- | --- | --- | --- | --- |
+| MAF g/s | 0.72 | 1.95 | **2.69** | 4.44 | 8.96 |
+| LTFT % | −30.1 | −10.2 | **−6.8** | −2.3 | 5.5 |
+| RPM | 553 | 584 | 705 | 861 | 994 |
+
+## What that does to the thresholds
+
+Every one of them was wrong, and not marginally:
+
+| Rule | Fires on this share of **normal running** |
+| --- | --- |
+| `MAF low < 3.5 g/s` | **70.2%** |
+| `rich <= -10%` | **24.1%** |
+| `neutral trim <= ±5%` covers | only 32.5% |
+| `idle elevated > 900 rpm` | 2.4% |
+
+The MAF number is the worst: the median healthy idle on this vehicle is 2.69 g/s,
+well under the 3.5 g/s I called abnormally low. The scenario value of 2.10 g/s
+that the whole demo verdict rests on sits inside this vehicle's **normal** idle
+range, around its 10th percentile.
+
+The trim number is nearly as bad. This vehicle idles at about −7%, so the engine
+reads normal running as "not neutral, heading rich".
+
+## False-positive rate: 49.7%
+
+Feed each of the 1,542 real idle samples to the engine alongside a stored
+`101E01` — a code that can be set by a transient and then latch — and ask what it
+concludes:
+
+```
+ 775 (50.3%)  no substantive verdict
+ 411 (26.7%)  "signal implausible with no mixture error: sensor or wiring"
+ 356 (23.1%)  "over-fuelling: injector leak, fuel pressure regulation"
+ false-positive rate: 49.7%
+```
+
+Half the time it names a fault on a vehicle that is running normally, and in
+23.1% of cases it would send a technician at the fuel system.
+
+One measurement here was wrong first time and is worth recording: run with no
+stored DTCs, the rate came out at 0.0% — because the engine short-circuits to
+"no faults" before reaching the mixture logic, so that configuration tested
+nothing. A clean-looking result from a test that never exercised the code is
+worse than a bad result.
+
+## The architectural conclusion
+
+Do not recalibrate these constants to this vehicle. That would move the
+circularity from my intuition to one unknown 2018 petrol car.
+
+The finding is that **global absolute thresholds cannot work**. The spread of
+normal idle MAF across vehicles is wider than the deviation a real leak produces,
+so any single number is either blind or a false-positive generator. What the
+engine needs is a **per-vehicle or per-engine-family baseline** and a verdict
+based on deviation from it — the vehicle's own normal, captured when it was
+healthy, or a model-specific reference built from logs.
+
+Until that exists, the honest behaviour is to report low confidence whenever no
+baseline is available for the vehicle being scanned, rather than medium.
