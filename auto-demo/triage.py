@@ -240,7 +240,8 @@ def _indeterminate(evidence, plan=None):
     }
 
 
-def _near_cutoff(value, reference, direction, min_effect, score=None) -> bool:
+def _near_cutoff(value, reference, direction, min_effect, score=None,
+                 sigma: float = None) -> bool:
     """Is this reading sitting on the cutoff that decides the question being asked?
 
     Two things can make a deviation decisive -- a sigma excursion and a minimum
@@ -251,12 +252,13 @@ def _near_cutoff(value, reference, direction, min_effect, score=None) -> bool:
     """
     if value is None or reference is None:
         return False
+    sigma = DEVIATION_SIGMA if sigma is None else sigma
     score = reference.z(value) if score is None else score
     if direction == "high" and score <= 0:
         return False
     if direction == "low" and score >= 0:
         return False
-    if abs(abs(score) - DEVIATION_SIGMA) <= DEVIATION_SIGMA * CUTOFF_MARGIN:
+    if abs(abs(score) - sigma) <= sigma * CUTOFF_MARGIN:
         return True
     effect = abs(value - reference.median)
     return min_effect > 0 and abs(effect - min_effect) <= min_effect * CUTOFF_MARGIN
@@ -318,7 +320,11 @@ def _mixture_hypothesis(live: dict, baseline: Baseline) -> dict:
     # Corroboration: neither channel alone clears its bar, but both have moved
     # past the lower bar in the directions an unmetered leak produces.
     corroborated = False
-    if not trim_lean and maf_channel is not None and maf_score is not None:
+    # Evaluated whether or not the single-channel bar was cleared. Gating this on
+    # a missed bar made the logic non-monotonic: a reading that just cleared the
+    # bar landed in the borderline zone and was blanked, while a slightly smaller
+    # one fell through to corroboration and was decided.
+    if maf_channel is not None and maf_score is not None:
         trim_partial, _ = trim_channel.deviates(
             trim, "high", sigma=CORROBORATED_SIGMA,
             min_effect=trim_effect * CORROBORATED_SIGMA / DEVIATION_SIGMA)
@@ -326,8 +332,25 @@ def _mixture_hypothesis(live: dict, baseline: Baseline) -> dict:
             maf, "low", sigma=CORROBORATED_SIGMA,
             min_effect=_min_effect(MAF, maf_channel) * CORROBORATED_SIGMA / DEVIATION_SIGMA)
         if trim_partial and maf_partial:
+            # Corroboration lowers the bar, so it needs the same protection the
+            # full bar has: a reading sitting on the lower cutoff decides no more
+            # than one sitting on the higher one.
+            scaled = CORROBORATED_SIGMA / DEVIATION_SIGMA
+            on_the_line = _near_cutoff(
+                trim, trim_channel, "high", trim_effect * scaled, trim_score,
+                sigma=CORROBORATED_SIGMA,
+            ) or _near_cutoff(
+                maf, maf_channel, "low", _min_effect(MAF, maf_channel) * scaled, maf_score,
+                sigma=CORROBORATED_SIGMA,
+            )
+            if on_the_line:
+                evidence.append(
+                    f"Air mass and fuel trim both moved in the directions a leak "
+                    f"produces, but one sits on the {CORROBORATED_SIGMA}σ corroboration "
+                    f"cutoff, so the pair decides nothing."
+                )
+                return _indeterminate(evidence)
             corroborated = True
-            trim_lean = True
             evidence.append(
                 f"Neither channel alone clears {DEVIATION_SIGMA}σ, but air mass is "
                 f"{_sigma_text(maf_score)} and fuel trim {_sigma_text(trim_score)}: both past "
@@ -335,6 +358,10 @@ def _mixture_hypothesis(live: dict, baseline: Baseline) -> dict:
                 f"produces together. Taken as corroborating evidence."
             )
 
+    trim_lean = trim_lean or corroborated
+    # Corroboration is independent evidence and resolves a borderline reading.
+    # Without it, a reading sitting on either cutoff decides nothing, whichever
+    # side of the line it happens to fall.
     if not corroborated and (
         _near_cutoff(trim, trim_channel, "high", trim_effect, trim_score)
         or _near_cutoff(trim, trim_channel, "low", trim_effect, trim_score)
