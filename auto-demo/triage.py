@@ -64,6 +64,14 @@ MAP = "intake_manifold_pressure_hpa"
 # A deviation within this fraction of the cutoff decides nothing either way.
 CUTOFF_MARGIN = 0.2
 
+# A single channel must clear the full bar on its own. Two channels moving
+# together in the pattern the fault predicts may each clear a lower one: an
+# unmetered leak pushes air mass down and fuel trim up at the same time, and
+# noise producing both at once, in those directions, is far less likely than
+# noise producing either. This is what recovers small leaks that a
+# single-channel bar misses, without lowering the bar generally.
+CORROBORATED_SIGMA = 2.0
+
 # Smallest change in each channel that a technician would act on, regardless of
 # how many sigma it represents. Without these, a quiet baseline turns sensor
 # noise into a diagnosis. Absolute units, except where noted as a fraction of the
@@ -76,6 +84,19 @@ MIN_EFFECT_FRACTION = {
     MAF: 0.15,    # 15% of healthy air mass
     MAP: 0.15,    # 15% of healthy manifold pressure
 }
+
+
+def _sigma_text(score: float) -> str:
+    """Report an implausibly large deviation as a bound rather than a number.
+
+    A very tight baseline makes ordinary differences enormous in sigma. Printing
+    "+762σ" invites a reader to treat arithmetic as certainty, when past roughly
+    thirty sigma the only honest statement is that the reading is nowhere near
+    this vehicle's normal.
+    """
+    if abs(score) > 30:
+        return f"{'+' if score > 0 else '-'}>30σ"
+    return f"{score:+.1f}σ"
 
 
 def _min_effect(channel_name, reference):
@@ -280,22 +301,46 @@ def _mixture_hypothesis(live: dict, baseline: Baseline) -> dict:
     trim_rich, _ = trim_channel.deviates(trim, "low", min_effect=trim_effect)
     evidence.append(
         f"Fuel trim {trim:+.1f}% against a healthy {trim_channel.median:+.1f}%: "
-        f"{trim_score:+.1f}σ, a move of {abs(trim - trim_channel.median):.1f} points "
+        f"{_sigma_text(trim_score)}, a move of {abs(trim - trim_channel.median):.1f} points "
         f"(acted on above {trim_effect:.0f})."
     )
-    if _near_cutoff(trim, trim_channel, "high", trim_effect, trim_score) or \
-            _near_cutoff(trim, trim_channel, "low", trim_effect, trim_score):
-        evidence.append("That deviation sits on the decision cutoff and separates nothing.")
-        return _indeterminate(evidence)
 
     maf_low, maf_score = (False, None)
+    maf_channel = None
     if maf is not None and baseline.covers(MAF):
         maf_channel = baseline.channel(MAF)
         maf_low, maf_score = maf_channel.deviates(
             maf, "low", min_effect=_min_effect(MAF, maf_channel))
         evidence.append(
-            f"MAF {maf} g/s against a healthy {baseline.channel(MAF).median} g/s: {maf_score:+.1f}σ."
+            f"MAF {maf} g/s against a healthy {maf_channel.median} g/s: {_sigma_text(maf_score)}."
         )
+
+    # Corroboration: neither channel alone clears its bar, but both have moved
+    # past the lower bar in the directions an unmetered leak produces.
+    corroborated = False
+    if not trim_lean and maf_channel is not None and maf_score is not None:
+        trim_partial, _ = trim_channel.deviates(
+            trim, "high", sigma=CORROBORATED_SIGMA,
+            min_effect=trim_effect * CORROBORATED_SIGMA / DEVIATION_SIGMA)
+        maf_partial, _ = maf_channel.deviates(
+            maf, "low", sigma=CORROBORATED_SIGMA,
+            min_effect=_min_effect(MAF, maf_channel) * CORROBORATED_SIGMA / DEVIATION_SIGMA)
+        if trim_partial and maf_partial:
+            corroborated = True
+            trim_lean = True
+            evidence.append(
+                f"Neither channel alone clears {DEVIATION_SIGMA}σ, but air mass is "
+                f"{_sigma_text(maf_score)} and fuel trim {_sigma_text(trim_score)}: both past "
+                f"{CORROBORATED_SIGMA}σ, and in the two directions an unmetered leak "
+                f"produces together. Taken as corroborating evidence."
+            )
+
+    if not corroborated and (
+        _near_cutoff(trim, trim_channel, "high", trim_effect, trim_score)
+        or _near_cutoff(trim, trim_channel, "low", trim_effect, trim_score)
+    ):
+        evidence.append("That deviation sits on the decision cutoff and separates nothing.")
+        return _indeterminate(evidence)
 
     # Case 1: trim has not moved, so the mixture is correct and no unmetered air
     # is entering. A MAF reading that has moved is then the reading's problem.
@@ -359,7 +404,7 @@ def _mixture_hypothesis(live: dict, baseline: Baseline) -> dict:
     map_high, map_score = map_channel.deviates(
         map_hpa, "high", min_effect=_min_effect(MAP, map_channel))
     evidence.append(
-        f"Manifold pressure {map_hpa} hPa against a healthy {map_channel.median} hPa: {map_score:+.1f}σ."
+        f"Manifold pressure {map_hpa} hPa against a healthy {map_channel.median} hPa: {_sigma_text(map_score)}."
     )
     rpm_high, rpm_score = (False, None)
     if rpm is not None and baseline.covers(RPM):
@@ -367,7 +412,7 @@ def _mixture_hypothesis(live: dict, baseline: Baseline) -> dict:
         rpm_high, rpm_score = rpm_channel.deviates(
             rpm, "high", min_effect=_min_effect(RPM, rpm_channel))
         evidence.append(
-            f"Idle {rpm} rpm against a healthy {baseline.channel(RPM).median} rpm: {rpm_score:+.1f}σ."
+            f"Idle {rpm} rpm against a healthy {baseline.channel(RPM).median} rpm: {_sigma_text(rpm_score)}."
         )
     if _near_cutoff(map_hpa, map_channel, "high", _min_effect(MAP, map_channel), map_score) or (
         rpm is not None and baseline.covers(RPM)
@@ -379,9 +424,9 @@ def _mixture_hypothesis(live: dict, baseline: Baseline) -> dict:
     if map_high or rpm_high:
         reasons = []
         if map_high:
-            reasons.append(f"manifold pressure is {map_score:+.1f}σ above this vehicle's healthy value")
+            reasons.append(f"manifold pressure is {_sigma_text(map_score)} above this vehicle's healthy value")
         if rpm_high:
-            reasons.append(f"idle is {rpm_score:+.1f}σ above it")
+            reasons.append(f"idle is {_sigma_text(rpm_score)} above it")
         evidence.append(
             "Lean mixture with " + " and ".join(reasons) + ": the throttle plate has lost "
             "control of manifold pressure, so air is entering downstream of it."

@@ -25,6 +25,16 @@ from robustness import make_scan
 from triage import MAF, RPM, TRIM, triage
 
 IDLE_RPM_RANGE = (550, 1000)
+
+# A baseline is only as quiet as the conditions it was recorded under. Mixing
+# cold starts, warm-up enrichment and unstable idle into one distribution
+# inflates its spread, and every point of spread costs detection sensitivity
+# directly: the decision bar is three robust sigma.
+STRICT = {
+    "rpm": (620, 820),        # settled idle, not warm-up fast idle or a stumble
+    "coolant_min": 80.0,      # closed-loop fuelling only; trim means nothing cold
+    "throttle_max": 20.0,     # foot off the pedal
+}
 SUBSTANTIVE_MARKERS = ("Unmetered air", "Over-fuelling", "signal implausible")
 
 
@@ -35,8 +45,12 @@ def column(header, pattern):
     return None
 
 
-def load_idle_samples(data_dir, files=None):
-    """Every idle sample from every log carrying MAF, long-term trim and RPM."""
+def load_idle_samples(data_dir, files=None, strict=False):
+    """Idle samples from every log carrying MAF, long-term trim and RPM.
+
+    With strict=True, only settled warm idle with the throttle closed, which is
+    the condition a baseline should actually be recorded under.
+    """
     samples = []
     files_used = 0
     for path in files if files is not None else sorted(glob.glob(os.path.join(data_dir, "*.csv"))):
@@ -49,7 +63,11 @@ def load_idle_samples(data_dir, files=None):
         i_trim = column(header, r"Long Term Fuel Trim Bank 1")
         i_rpm = column(header, r"Engine RPM")
         i_speed = column(header, r"Vehicle Speed")
+        i_coolant = column(header, r"Engine Coolant Temperature")
+        i_throttle = column(header, r"Absolute Throttle Position \(")
         if None in (i_maf, i_trim, i_rpm):
+            continue
+        if strict and None in (i_coolant, i_throttle):
             continue
         files_used += 1
         for row in rows[3:]:
@@ -65,7 +83,20 @@ def load_idle_samples(data_dir, files=None):
                     speed = float(row[i_speed])
                 except (ValueError, IndexError):
                     speed = None
-            if IDLE_RPM_RANGE[0] <= rpm <= IDLE_RPM_RANGE[1] and (speed is None or speed == 0):
+            if speed is not None and speed != 0:
+                continue
+            if strict:
+                try:
+                    coolant = float(row[i_coolant])
+                    throttle = float(row[i_throttle])
+                except (ValueError, IndexError):
+                    continue
+                if not (STRICT["rpm"][0] <= rpm <= STRICT["rpm"][1]
+                        and coolant >= STRICT["coolant_min"]
+                        and throttle <= STRICT["throttle_max"]):
+                    continue
+                samples.append({"maf": maf, "trim": trim, "rpm": rpm})
+            elif IDLE_RPM_RANGE[0] <= rpm <= IDLE_RPM_RANGE[1]:
                 samples.append({"maf": maf, "trim": trim, "rpm": rpm})
     return samples, files_used
 

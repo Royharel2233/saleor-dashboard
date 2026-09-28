@@ -50,12 +50,15 @@ NRC_REQUEST_OUT_OF_RANGE = 0x31
 class Ecu:
     """One simulated ECU: a logical address, a DTC memory, and a DID table."""
 
-    def __init__(self, address, name, dtcs, dids):
+    def __init__(self, address, name, dtcs, dids, snapshots=None):
         self.address = address
         self.name = name
         # dtcs: list of (dtc_number:int 3-byte, status:int, text:str)
         self.dtcs = list(dtcs)
         self.dids = dict(dids)
+        # snapshots: {dtc_number: {record_number: {did: packed bytes}}}
+        # The freeze frame: what the ECU recorded at the moment the code set.
+        self.snapshots = dict(snapshots or {})
         self.session = 0x01
 
     def handle_uds(self, request: bytes) -> bytes:
@@ -128,6 +131,28 @@ class Ecu:
                 if status & status_mask:
                     body += number.to_bytes(3, "big") + bytes([status])
             return bytes([0x59, sub, mask_available]) + body
+        if sub == 0x04:  # reportDTCSnapshotRecordByDTCNumber
+            if len(request) < 6:
+                return self._nrc(0x19, NRC_REQUEST_OUT_OF_RANGE)
+            number = int.from_bytes(request[2:5], "big")
+            wanted = request[5]
+            records = self.snapshots.get(number)
+            if records is None:
+                return self._nrc(0x19, NRC_REQUEST_OUT_OF_RANGE)
+            status = next((s for n, s, _ in self.dtcs if n == number), 0x00)
+            body = bytes([0x59, 0x04]) + number.to_bytes(3, "big") + bytes([status])
+            for record_number, identifiers in sorted(records.items()):
+                if wanted not in (0xFF, record_number):
+                    continue
+                # Per ISO 14229: record number, count of identifiers, then each
+                # identifier followed by its data. The data LENGTH is not in the
+                # response -- a client needs the OEM's identifier database to
+                # know where one value ends and the next begins.
+                body += bytes([record_number, len(identifiers)])
+                for did, value in sorted(identifiers.items()):
+                    body += struct.pack(">H", did) + value
+            return body
+
         if sub == 0x06:  # reportDTCExtendedDataRecordByDTCNumber
             if len(request) < 5:
                 return self._nrc(0x19, NRC_REQUEST_OUT_OF_RANGE)
@@ -228,7 +253,13 @@ def build_vehicle(scenario_name="intake_leak"):
         # Fuel trim is signed; the others are not.
         dme_dids[did] = struct.pack(">h" if did == 0x4002 else ">H", value)
 
-    dme = Ecu(0x0012, "DME (Engine Management)", scenario["dme_dtcs"], dme_dids)
+    # The freeze frame holds the conditions when the code set, which is the
+    # evidence a technician actually wants: the fault rarely repeats on demand
+    # at idle in the workshop.
+    snapshots = {}
+    for number, _, _ in scenario["dme_dtcs"]:
+        snapshots[number] = {0x01: {did: dme_dids[did] for did in sorted(scenario["dme_live"])}}
+    dme = Ecu(0x0012, "DME (Engine Management)", scenario["dme_dtcs"], dme_dids, snapshots)
     dsc = Ecu(0x0029, "DSC (Dynamic Stability Control)", [], {0xF190: vin_bytes})
     bdc = Ecu(0x0040, "BDC (Body Domain Controller)", [], {0xF190: vin_bytes})
     if scenario["downstream"]:

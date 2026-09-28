@@ -274,3 +274,57 @@ model is the assumption under test, not evidence for it. One measurement on one
 vehicle settles it, and the curve names exactly which measurement: induce a leak
 of known area at idle, record the trim shift, and check it against
 `100 * f / (1 - f)`.
+
+## Recovering the small-leak blind spot
+
+Two levers, measured on the same held-out real samples:
+
+| baseline conditions | trim σ | rpm σ | detection floor (50%) | 10% leak |
+| --- | --- | --- | --- | --- |
+| any idle, single reading | 4.74 | 150 | 15% | 4.1% |
+| settled warm idle, single reading | 3.93 | 76 | 15% | 4.1% |
+| settled warm idle, median of 16 | 2.34 | 21 | **8%** | **100%** |
+
+**Conditions**: warm coolant, closed throttle, settled idle band. Halves the idle
+speed spread and lifts 15%-leak detection from 64% to 90%, but leaves the small
+leaks invisible, because the trim bar is still about 12 points.
+
+**Averaging**: the median of 16 readings has roughly a quarter of the spread, and
+the decision bar is a multiple of the spread, so the smallest detectable leak
+falls with it. One UDS read is a noisy sample; a tester can sit at idle and log
+for half a minute. This is the lever that costs nothing but time. (Measured on
+13 held-out windows — the mechanism is σ/√K, but the measurement itself is thin.)
+
+**What did not work, and why it is worth recording**: requiring corroboration
+between channels — air mass down *and* trim up together, each at a lower bar —
+changed nothing measurable. On this vehicle a 10% leak moves MAF by only 0.37σ,
+because its healthy idle air mass spans 1.95 to 4.44 g/s. At idle the leak
+signature is carried almost entirely by fuel trim. The idea is sound and the code
+is kept for vehicles where manifold pressure is available; it simply has no
+purchase on this data.
+
+## The full cycle
+
+`python cycle.py --scenario intake_leak` runs the sequence a tester actually
+performs:
+
+```
+routing activation -> extended session -> read fault memory (0x19 0x02)
+  -> read each fault's freeze frame (0x19 0x04)
+    -> compare against the vehicle's healthy baseline -> verdict
+```
+
+The freeze frame is the point. A fault rarely reproduces on demand while the car
+sits at idle in a workshop, and the ECU already recorded the conditions at the
+moment the code set. `0x19 0x04` returns the DTC, its status, then per record a
+record number, an identifier count, and each identifier with its data.
+
+**The identifier's data length is not in the response.** A client needs the
+manufacturer's identifier database to know where one value ends and the next
+begins; without it the remainder of the record is unparseable, and the parser
+reports the unparsed tail rather than guessing. This is why real tools ship an
+OEM database, and it is a hard constraint on any generic diagnostic agent.
+
+The cycle also refuses a comparison it cannot make: a freeze frame captured at
+2,500 rpm under load, judged against an idle baseline, would make normal running
+look catastrophic. The conditions are checked before the verdict.

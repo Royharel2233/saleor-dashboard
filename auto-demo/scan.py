@@ -40,6 +40,47 @@ LIVE_DIDS = {
     0x4004: ("intake_manifold_pressure_hpa", lambda b: struct.unpack(">H", b)[0]),
 }
 
+# Snapshot parsing needs the length of each data identifier, because the UDS
+# response does not carry it. On a real vehicle this table comes from the
+# manufacturer's database; an unknown identifier makes the rest of the record
+# unparseable, which is why real tools ship an OEM database rather than guessing.
+DID_LENGTHS = {0x4001: 2, 0x4002: 2, 0x4003: 2, 0x4004: 2, 0xF190: 17, 0xF186: 1}
+
+
+def read_snapshot(client, dtc_code: int, record: int = 0xFF):
+    """Read a DTC's freeze frame (UDS 0x19 subfunction 0x04)."""
+    request = bytes([0x19, 0x04]) + dtc_code.to_bytes(3, "big") + bytes([record])
+    response = raw_uds(client, request)
+    if not response or response[0] != 0x59:
+        return {"supported": False, "raw": response.hex(" ").upper() if response else None}
+
+    records, offset = {}, 6  # 0x59 0x04, 3-byte DTC, status byte
+    while offset + 1 < len(response):
+        record_number, count = response[offset], response[offset + 1]
+        offset += 2
+        values, unparsed = {}, None
+        for _ in range(count):
+            if offset + 2 > len(response):
+                break
+            did = int.from_bytes(response[offset:offset + 2], "big")
+            offset += 2
+            length = DID_LENGTHS.get(did)
+            if length is None:
+                # Without the identifier's length the remainder cannot be split.
+                unparsed = response[offset:].hex(" ").upper()
+                offset = len(response)
+                break
+            raw = response[offset:offset + length]
+            offset += length
+            name, decode = LIVE_DIDS.get(did, (f"did_0x{did:04X}", lambda b: b.hex().upper()))
+            try:
+                values[name] = decode(raw)
+            except Exception:
+                values[name] = raw.hex().upper()
+        records[record_number] = {"values": values, "unparsed_tail": unparsed}
+    return {"supported": True, "records": records, "raw": response.hex(" ").upper()}
+
+
 STATUS_BITS = [
     (0x01, "testFailed"),
     (0x02, "testFailedThisOperationCycle"),
