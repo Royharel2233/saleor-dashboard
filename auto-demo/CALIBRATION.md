@@ -148,3 +148,64 @@ healthy, or a model-specific reference built from logs.
 
 Until that exists, the honest behaviour is to report low confidence whenever no
 baseline is available for the vehicle being scanned, rather than medium.
+
+---
+
+# Real faulty data: what it could and could not settle
+
+The BlueDriver logs measure false positives, because nothing in them is broken.
+For a true-positive rate something has to be broken, with a label saying so.
+
+## What was found
+
+**MechanicDB** (via `seifeldin2003/ITI-RAG`) — 91 DTC codes and 321 code-to-fix
+rows carrying probability rank, difficulty, parts cost, labour hours and
+step-by-step instructions. Genuinely useful for the RAG layer that writes an
+inspection plan. **Not usable as ground truth:** it is authored reference
+content, not observed cases, and the prose reads machine-generated. Scoring an
+LLM's diagnosis against an LLM-written knowledge base measures agreement between
+two models, not correctness.
+
+**DieselOBD** — real vehicles, real stored DTCs, rows labelled with which codes
+were present, including three fault-free vehicles. This is real faulty data.
+
+## The detection test that ran
+
+Baseline built from 2,961 idle rows labelled `P0000` (fault-free), evaluated on
+2,962 held-out healthy rows and 3,991 rows labelled `P0107` (manifold pressure
+circuit low):
+
+```
+held-out healthy : 2962 rows   flagged      0  (0.0%)
+P0107-labelled   : 3991 rows   detected  3991  (100.0%)
+MAP median healthy 14.80 vs faulted 2.80
+```
+
+## Why that number is worth much less than it looks
+
+**It is close to tautological.** A `P0107` label means the ECU judged its own
+manifold pressure signal implausible. Detecting that fault *from the manifold
+pressure reading* re-derives the conclusion from the evidence that produced it.
+The separation is 14.80 against 2.80 — a signal so large that any method
+detects it, including a fixed threshold, which is precisely the approach the
+BlueDriver data disproved.
+
+What this does establish: the machinery in `baseline.py` works on data nobody
+here produced, and does not fire on real healthy running. That is plumbing
+validated, not diagnosis validated.
+
+**The MAF path could not be tested at all.** That channel is quantised to 0.01
+in these logs, giving exactly three distinct values at idle
+(`0.01, 0.02, 0.03`). No baseline built on a three-level signal can resolve a
+deviation.
+
+## What a real true-positive test still requires
+
+A fault whose evidence sits in a **different channel from the one that set the
+code**, with a repair that confirmed the cause. `101E01` diagnosed through fuel
+trim and manifold pressure is exactly that shape; `P0107` diagnosed through
+manifold pressure is not.
+
+Nothing found so far has it. The two sources that would are a workshop case
+archive with verified repairs, or one vehicle with a deliberately induced fault,
+where the baseline and the fault come from the same car in the same session.
