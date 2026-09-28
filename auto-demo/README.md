@@ -228,3 +228,49 @@ data with a verified repair here, so the true-positive rate is only known agains
 the simulator, where `discriminate.py` still separates all five scenarios.
 A 0% false-positive rate is trivial to achieve by never answering; the pairing of
 0.2% false positives with 5/5 discrimination is the claim.
+
+## Sensitivity without a vehicle
+
+`python injection.py` applies a physically-derived fault to real healthy logs.
+The substrate is real — 638 held-out idle samples from a petrol vehicle, with
+that vehicle's own noise — and only the perturbation is modelled, from
+conservation of mass rather than chosen to be detectable:
+
+At idle the ECU governs engine speed, so total charge is roughly constant. Air
+admitted downstream of the sensor displaces air through it, as the throttle
+closes to compensate:
+
+```
+measured MAF   ->  m * (1 - f)
+long-term trim ->  t + 100 * f / (1 - f)
+```
+
+| leak, as fraction of idle air flow | Δtrim | detected |
+| --- | --- | --- |
+| 0% | +0.0 | **0.2%** (false positives) |
+| 5% | +5.3 | 0.6% |
+| 10% | +11.1 | 5.3% |
+| 15% | +17.6 | 63.8% |
+| 20% | +25.0 | 99.8% |
+| 30% | +42.9 | 100.0% |
+
+### The trade-off, quantified
+
+Detection crosses 50% at a leak of roughly **15% of idle air flow**, an 18-point
+trim shift. Below 10% the engine is effectively blind: a leak producing an
+11-point trim shift is caught 5% of the time.
+
+That is the price of the fix for the 49.7% false-positive rate, and it is
+legible rather than hidden. This vehicle's trim baseline has a robust sigma of
+4.7 points, so a 3-sigma bar is a 14-point shift before anything is called. A
+quieter baseline — warm idle only, more samples, tighter conditions — buys
+sensitivity back directly. That is a calibration decision with a visible cost on
+both sides, not a threshold someone guessed.
+
+### What it still does not establish
+
+That a real leak of a given size produces this trim and air-mass response. The
+model is the assumption under test, not evidence for it. One measurement on one
+vehicle settles it, and the curve names exactly which measurement: induce a leak
+of known area at idle, record the trim shift, and check it against
+`100 * f / (1 - f)`.
