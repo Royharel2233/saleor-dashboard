@@ -27,7 +27,18 @@ from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 import scan
+from baseline import Baseline
 from triage import triage as run_triage
+
+BASELINE_PATH = os.environ.get("VEHICLE_MCP_BASELINE", "baseline_simulated_b48.json")
+
+
+def load_baseline():
+    """The healthy reference this vehicle's readings are judged against."""
+    try:
+        return Baseline.load(BASELINE_PATH)
+    except (OSError, ValueError, KeyError):
+        return None
 
 mcp = MCPServer(
     name="vehicle_diagnostics_mcp",
@@ -231,9 +242,14 @@ def vehicle_triage_scan(host: Host = "127.0.0.1", port: Port = 13400) -> str:
 
     Separates consequential faults (a downstream ECU reporting an invalid signal
     because its upstream source is unhealthy) from independent ones, and cites
-    the live values supporting the verdict. The reported `engine` field says
-    whether an LLM or the deterministic model produced it -- surface that to the
-    user rather than presenting the verdict as unconditional.
+    the live values supporting the verdict.
+
+    Every judgement is made against a recorded healthy baseline for the vehicle.
+    Without one the tool reports what it measured and names no cause, which is
+    correct rather than unhelpful: healthy idle values vary more between vehicles
+    than a fault moves them within one. The `engine` field says whether an LLM or
+    the deterministic model produced the verdict -- surface it rather than
+    presenting the verdict as unconditional.
 
     Returns: JSON {primary, consequential[], independent[], evidence[], plan[], engine}.
     """
@@ -241,7 +257,16 @@ def vehicle_triage_scan(host: Host = "127.0.0.1", port: Port = 13400) -> str:
         scan_result = scan.full_scan(host, int(port))
     except (ConnectionRefusedError, OSError, TimeoutError) as exc:
         return json.dumps({"status": "error", "message": _connect_hint(host, port, exc)}, indent=2)
-    return json.dumps({"scan": scan_result, "verdict": run_triage(scan_result)}, indent=2)
+    reference = load_baseline()
+    verdict = run_triage(scan_result, reference)
+    return json.dumps(
+        {"scan": scan_result, "verdict": verdict,
+         "baseline": reference.name if reference else None,
+         "note": None if reference else
+                 "No baseline for this vehicle, so no cause is named. Readings alone "
+                 "do not separate a fault from normal variation between vehicles."},
+        indent=2,
+    )
 
 
 # --------------------------------------------------------------------------

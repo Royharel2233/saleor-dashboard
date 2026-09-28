@@ -14,6 +14,7 @@ UDS services per ECU: 0x10, 0x3E, 0x22, 0x19 (sub 0x01/0x02/0x06), 0x14, 0x31.
 
 import argparse
 import logging
+import random
 import socket
 import socketserver
 import struct
@@ -90,6 +91,12 @@ class Ecu:
         # P2server = 50ms, P2*server = 5000ms (10ms resolution)
         return bytes([0x50, sub]) + struct.pack(">HH", 50, 500)
 
+    # Live sensor channels. A real sensor never returns the same number twice,
+    # and a baseline built from identical readings would have no spread to
+    # measure a deviation against, so these are jittered on every read.
+    LIVE_DIDS = {0x4001: ">H", 0x4002: ">h", 0x4003: ">H", 0x4004: ">H"}
+    JITTER = 0.03
+
     def _read_data_by_identifier(self, request):
         if len(request) < 3:
             return self._nrc(0x22, NRC_REQUEST_OUT_OF_RANGE)
@@ -97,6 +104,12 @@ class Ecu:
         value = self.dids.get(did)
         if value is None:
             return self._nrc(0x22, NRC_REQUEST_OUT_OF_RANGE)
+        fmt = self.LIVE_DIDS.get(did)
+        if fmt:
+            raw = struct.unpack(fmt, value)[0]
+            noisy = int(round(raw * (1 + random.gauss(0, self.JITTER))))
+            limit = 32767 if fmt == ">h" else 65535
+            value = struct.pack(fmt, max(-limit, min(limit, noisy)))
         return bytes([0x62]) + struct.pack(">H", did) + value
 
     def _read_dtc_information(self, request):

@@ -1,0 +1,27 @@
+{
+  "name": "BlueDriver petrol vehicle (2018)",
+  "source": "56 held-in logs, 904 idle samples",
+  "channels": {
+    "maf_g_per_s": {
+      "median": 2.79,
+      "mad": 0.71,
+      "p5": 1.98,
+      "p95": 4.46,
+      "n": 904
+    },
+    "long_term_fuel_trim_pct": {
+      "median": -7.0,
+      "mad": 3.2,
+      "p5": -10.2,
+      "p95": -2.3,
+      "n": 904
+    },
+    "engine_speed_rpm": {
+      "median": 712.5,
+      "mad": 101.5,
+      "p5": 583.0,
+      "p95": 872.0,
+      "n": 904
+    }
+  }
+}

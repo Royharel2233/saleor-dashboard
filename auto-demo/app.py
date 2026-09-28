@@ -5,12 +5,24 @@ and the app reports a connection failure instead of a canned result.
 """
 
 import json
+import os
 import time
 
 import streamlit as st
 
+from baseline import Baseline
 from scan import full_scan
 from triage import triage
+
+BASELINE_PATH = "baseline_simulated_b48.json"
+
+
+def load_baseline():
+    """A verdict is expressed against what this vehicle reads when healthy.
+    Without that reference the engine reports readings and declines a cause."""
+    if os.path.exists(BASELINE_PATH):
+        return Baseline.load(BASELINE_PATH)
+    return None
 
 st.set_page_config(page_title="AI Vehicle Diagnostic Triage", layout="wide")
 
@@ -22,6 +34,17 @@ with st.sidebar:
     host = st.text_input("Gateway address", value="127.0.0.1", help="169.254.1.1 with a BMW ENET cable")
     port = st.number_input("TCP port", value=13400, step=1)
     st.caption("Simulator: `python doip_simulator.py`")
+    st.divider()
+    st.header("Baseline")
+    reference = load_baseline()
+    if reference:
+        st.success(f"Loaded: {reference.name}")
+        st.caption(reference.source)
+    else:
+        st.warning("No baseline recorded. The engine will report readings but "
+                   "decline to name a cause — healthy idle values vary more "
+                   "between vehicles than a fault moves them within one.")
+        st.caption("Record one with `python discriminate.py`.")
 
 if st.button("RUN FULL VEHICLE SCAN", type="primary"):
     with st.spinner(f"Routing activation and UDS scan over DoIP ({host}:{port})..."):
@@ -32,7 +55,7 @@ if st.button("RUN FULL VEHICLE SCAN", type="primary"):
             st.error(f"No DoIP entity at {host}:{port} — {type(exc).__name__}: {exc}")
             st.info("Start the simulator with `python doip_simulator.py`, or plug in the ENET cable.")
             st.stop()
-        verdict = triage(scan)
+        verdict = triage(scan, reference)
         elapsed = time.time() - started
 
     total_dtcs = sum(len(ecu["dtcs"]) for ecu in scan["ecus"])

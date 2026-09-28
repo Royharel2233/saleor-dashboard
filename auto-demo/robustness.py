@@ -10,13 +10,20 @@ first inspection step sends a technician at something the data already excluded.
 import copy
 import json
 
-from triage import (
-    IDLE_MAF_EXPECTED,
-    IDLE_MAP_SEALED_MAX,
-    IDLE_RPM_NORMAL_MAX,
-    TRIM_LEAN_MIN,
-    TRIM_NEUTRAL_MAX,
-    triage,
+import random
+
+from baseline import DEVIATION_SIGMA, Baseline
+from triage import MAF, MAP, MIN_EFFECT, MIN_EFFECT_FRACTION, RPM, TRIM, triage
+
+# A healthy reference for a vehicle idling at the simulator's values. Built the
+# way a real one is: repeated reads of a known-good vehicle, with sensor spread.
+HEALTHY = {MAF: 3.98, TRIM: 1.20, RPM: 768.0, MAP: 346.0}
+_rng = random.Random(20260928)
+REFERENCE = Baseline.from_samples(
+    name="synthetic healthy idle",
+    source="120 simulated reads at 3% sensor noise",
+    samples={channel: [value * (1 + _rng.gauss(0, 0.03)) for _ in range(120)]
+             for channel, value in HEALTHY.items()},
 )
 
 
@@ -48,8 +55,8 @@ def make_scan(maf=2.10, trim=23.8, rpm=762, map_hpa=344, dtcs=True, live=True):
     }
 
 
-def cause_of(scan):
-    verdict = triage(scan)
+def cause_of(scan, reference=REFERENCE):
+    verdict = triage(scan, reference)
     primary = verdict["primary"]
     return (primary["cause"] if primary else "no faults"), primary["confidence"] if primary else "-", verdict
 
@@ -90,8 +97,10 @@ def sweep(field, values, **fixed):
 
 def boundary_check():
     print("=== 1. boundary sweep: where does the verdict flip, and does it flip once? ===")
-    print(f"    thresholds in use: MAF low < {IDLE_MAF_EXPECTED[0]}, MAP sealed <= {IDLE_MAP_SEALED_MAX}, "
-          f"idle normal <= {IDLE_RPM_NORMAL_MAX}, trim lean >= {TRIM_LEAN_MIN}, neutral <= {TRIM_NEUTRAL_MAX}")
+    print(f"    judged against {REFERENCE.describe()}")
+    print(f"    cutoff: {DEVIATION_SIGMA}σ, plus a minimum effect of "
+          f"{MIN_EFFECT[TRIM]} trim points / {MIN_EFFECT[RPM]:.0f} rpm / "
+          f"{MIN_EFFECT_FRACTION[MAF]:.0%} of healthy MAF and MAP")
     findings = []
 
     sweeps = [
@@ -122,11 +131,18 @@ def hysteresis_check():
     """A verdict that flips on a rounding error is not a diagnosis."""
     print("\n=== 2. sensitivity: verdict change for a 1% move in one signal ===")
     findings = []
+    def cutoff(channel, direction):
+        """The value at which this channel first counts as deviating."""
+        reference = REFERENCE.channel(channel)
+        floor = MIN_EFFECT.get(channel, abs(reference.median) * MIN_EFFECT_FRACTION.get(channel, 0))
+        step = max(DEVIATION_SIGMA * reference.sigma, floor)
+        return reference.median + (step if direction == "high" else -step)
+
     cases = [
         ("trim", 23.8), ("map_hpa", 344), ("rpm", 762), ("maf", 2.10),
-        ("trim", TRIM_LEAN_MIN), ("trim", TRIM_NEUTRAL_MAX),
-        ("map_hpa", IDLE_MAP_SEALED_MAX), ("rpm", IDLE_RPM_NORMAL_MAX),
-        ("maf", IDLE_MAF_EXPECTED[0]),
+        ("trim", round(cutoff(TRIM, "high"), 2)), ("trim", round(cutoff(TRIM, "low"), 2)),
+        ("map_hpa", round(cutoff(MAP, "high"), 1)), ("rpm", round(cutoff(RPM, "high"), 1)),
+        ("maf", round(cutoff(MAF, "low"), 2)),
     ]
     for field, value in cases:
         low = round(value * 0.99, 3)

@@ -183,3 +183,48 @@ See `CALIBRATION.md`. The DieselOBD dataset cannot calibrate these thresholds �
 it has no fuel trim channel, every vehicle is an unthrottled diesel, and its
 units are imperial while its README claims metric. The thresholds remain
 estimates, which is why nothing reports above medium confidence.
+
+## Baselines, not thresholds
+
+Measured against 1,542 real idle samples from a petrol vehicle, the original
+fixed thresholds named a fault on normal running **49.7%** of the time. A single
+"MAF below 3.5 g/s" rule fired on 70% of healthy idle, because that vehicle's
+healthy idle median is 2.69 g/s. Healthy values vary more between vehicles than
+a fault moves them within one, so no global number can separate the two.
+
+Every judgement is now made against a recorded baseline — what this vehicle
+reads at idle when healthy — using robust statistics (median and median absolute
+deviation). A reading counts as evidence only when it clears three bars:
+
+1. **3 robust sigma** from the vehicle's healthy median;
+2. **outside the observed healthy band** (p5..p95), so one stray sample cannot
+   carry a verdict;
+3. **a minimum absolute effect** — 5 trim points, 120 rpm, 15% of healthy MAF or
+   MAP.
+
+The third bar exists because of a bug the redesign introduced and the tests
+caught: against a very quiet baseline, fuel trim 0.3 percentage points from
+normal scores 14 sigma and the engine called a healthy vehicle over-fuelling.
+Statistical significance is not diagnostic significance. Every channel has a
+scale below which a difference does not matter, whatever the statistics say.
+
+### With no baseline, it names nothing
+
+That is the correct behaviour, not a gap to patch. An unreferenced reading does
+not support a cause. `python discriminate.py` records one from the healthy
+scenario and writes `baseline_simulated_b48.json`; on a real vehicle you log it
+while it is known good.
+
+### Measured result
+
+| | false positives on real normal running |
+| --- | --- |
+| fixed thresholds | **49.7%** |
+| vehicle's own baseline, out-of-sample | **0.2%** |
+
+The baseline is built from 56 logs and evaluated on a disjoint 56, so the rate is
+out-of-sample. What is **not** measured is sensitivity: there is no real faulty
+data with a verified repair here, so the true-positive rate is only known against
+the simulator, where `discriminate.py` still separates all five scenarios.
+A 0% false-positive rate is trivial to achieve by never answering; the pairing of
+0.2% false positives with 5/5 discrimination is the claim.
